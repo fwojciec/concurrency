@@ -14,7 +14,6 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-
 	var paths []string
 	for path := range m {
 		paths = append(paths, path)
