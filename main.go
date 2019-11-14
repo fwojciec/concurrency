@@ -15,16 +15,17 @@ import (
 
 // or also, stepping back even further, a function that generates category
 // links which will be only in turn used to generate product links.
-func genV1(nums ...int) <-chan int {
-	out := make(chan int)
-	go func() {
-		for _, n := range nums {
-			out <- n
-		}
-		close(out)
-	}()
-	return out
-}
+
+// func genWithoutBuffer(nums ...int) <-chan int {
+// 	out := make(chan int)
+// 	go func() {
+// 		for _, n := range nums {
+// 			out <- n
+// 		}
+// 		close(out)
+// 	}()
+// 	return out
+// }
 
 // we can simplify this function by using a buffered channel.
 // since the channel is buffered it can take all values without waiting or
@@ -46,31 +47,38 @@ func gen(nums ...int) <-chan int {
 
 // there can be multiple "worker" function taking messages from a single
 // channel -- i.e. constituting a "fan out".
-func sq(in <-chan int) <-chan int {
+func sq(done <-chan struct{}, in <-chan int) <-chan int {
 	out := make(chan int)
 	go func() {
+		defer close(out)
 		for n := range in {
-			// "work"
-			out <- n * n
+			select {
+			case out <- n * n:
+			case <-done:
+				return
+			}
 		}
-		close(out)
 	}()
 	return out
 }
 
 // this function is basically the "fan in" part of the arrangement. It takes in
 // multiple channels as argument and returns values on a single channel.
-func merge(cs ...<-chan int) <-chan int {
+func merge(done <-chan struct{}, cs ...<-chan int) <-chan int {
 	var wg sync.WaitGroup
 	out := make(chan int)
 
 	// start an output goroutine for each input channel in cs. output
 	// copies values from c to out until c is closed, then calls wg.Done
 	output := func(c <-chan int) {
+		defer wg.Done()
 		for n := range c {
-			out <- n
+			select {
+			case out <- n:
+			case <-done:
+				return
+			}
 		}
-		wg.Done()
 	}
 
 	wg.Add(len(cs))
@@ -88,12 +96,18 @@ func merge(cs ...<-chan int) <-chan int {
 }
 
 func main() {
+	// Set up a done channel that's shared by the whole pipeline,
+	// and close that channel when this pipeline exits, as a signal
+	// for all the gouroutines we started to exit.
+	done := make(chan struct{})
+	defer close(done)
+
 	in := gen(2, 3)
 
-	c1 := sq(in)
-	c2 := sq(in)
+	c1 := sq(done, in)
+	c2 := sq(done, in)
 
-	for n := range merge(c1, c2) {
-		fmt.Println(n)
-	}
+	// Consume the first value from output.
+	out := merge(done, c1, c2)
+	fmt.Println(<-out) // 4 or 9
 }
